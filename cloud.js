@@ -4,6 +4,10 @@
 
   const cfg = window.CLOUD_CONFIG || {};
   const CACHE_KEY = 'disease_survey_cloud_test_v1';
+  // 邀请/重置邮件回跳时 URL 会带认证参数，必须在创建客户端前读取，否则会被自动清理。
+  const linkParams = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
+  const linkType = linkParams.get('type') || '';
+  const linkError = linkParams.get('error_description') || linkParams.get('error') || '';
   const configured = Boolean(cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY);
   const cloud = configured
     ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY)
@@ -46,10 +50,10 @@
     const card = view.querySelector('.role-card');
     card.innerHTML = `
       <h1>📋 疾病资料调查协作系统</h1>
-      <p class="subtitle">免费多人在线测试版 · 仅限虚拟测试数据</p>
+      <p class="subtitle">多人在线协作 · 账号由管理员邮件邀请开通</p>
       <div style="text-align:left;max-width:380px;margin:22px auto 0;">
         <label style="display:block;margin-bottom:14px;">邮箱
-          <input id="cloudEmail" type="email" autocomplete="username" placeholder="管理员分配的邮箱"
+          <input id="cloudEmail" type="email" autocomplete="username" placeholder="你的工作邮箱"
             style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
         </label>
         <label style="display:block;margin-bottom:18px;">密码
@@ -57,8 +61,12 @@
             style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
         </label>
         <button id="cloudLoginBtn" class="role-start-btn" ${configured ? '' : 'disabled'}>登录在线系统</button>
+        <div style="margin-top:10px;display:flex;justify-content:space-between;">
+          <a id="cloudRegisterBtn" style="font-size:13px;color:#1890ff;cursor:pointer;">注册新账号</a>
+          <a id="cloudForgotBtn" style="font-size:13px;color:#1890ff;cursor:pointer;">忘记密码？</a>
+        </div>
         <div id="cloudLoginStatus" style="margin-top:14px;line-height:1.6;color:${configured ? '#666' : '#d4380d'};">
-          ${esc(message || (configured ? '使用管理员分配的账号登录。' : '云端尚未配置：请先填写 config.js 中的 Supabase 公开配置。'))}
+          ${esc(message || (configured ? '首次使用请点管理员邀请邮件中的链接设置密码。' : '云端尚未配置：请先填写 config.js 中的 Supabase 公开配置。'))}
         </div>
         <div style="margin-top:16px;font-size:12px;color:#999;line-height:1.6;">
           数据保存在统一云数据库；AI 密钥不会显示在网页中。未经单位许可，请勿录入真实病人资料。
@@ -67,9 +75,191 @@
     const btn = document.getElementById('cloudLoginBtn');
     if (configured) {
       btn.addEventListener('click', login);
+      document.getElementById('cloudForgotBtn').addEventListener('click', sendResetMail);
+      document.getElementById('cloudRegisterBtn').addEventListener('click', renderRegister);
       card.querySelectorAll('input').forEach(input => input.addEventListener('keydown', event => {
         if (event.key === 'Enter') login();
       }));
+    }
+  }
+
+  // 自助注册：填自己的邮箱和密码，注册后需管理员在系统内批准才能看数据。
+  function renderRegister(message) {
+    cloudReady = false;
+    document.getElementById('view-mainApp').classList.remove('active');
+    const view = document.getElementById('view-roleSelector');
+    view.classList.add('active');
+    const card = view.querySelector('.role-card');
+    card.innerHTML = `
+      <h1>📝 注册新账号</h1>
+      <p class="subtitle">使用你自己的邮箱注册，提交后等管理员批准</p>
+      <div style="text-align:left;max-width:380px;margin:22px auto 0;">
+        <label style="display:block;margin-bottom:14px;">邮箱
+          <input id="regEmail" type="email" autocomplete="username" placeholder="例如 xxx@qq.com"
+            style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+        </label>
+        <label style="display:block;margin-bottom:14px;">密码
+          <input id="regPwd1" type="password" autocomplete="new-password" placeholder="至少 6 位"
+            style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+        </label>
+        <label style="display:block;margin-bottom:18px;">确认密码
+          <input id="regPwd2" type="password" autocomplete="new-password" placeholder="再次输入密码"
+            style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+        </label>
+        <button id="regSubmitBtn" class="role-start-btn">提交注册</button>
+        <div style="margin-top:10px;text-align:right;">
+          <a id="regBackBtn" style="font-size:13px;color:#1890ff;cursor:pointer;">返回登录</a>
+        </div>
+        <div id="regStatus" style="margin-top:14px;line-height:1.6;color:${message ? '#d4380d' : '#666'};">
+          ${esc(message || '密码由你本人设置，管理员也无法查看。')}
+        </div>
+      </div>`;
+    document.getElementById('regSubmitBtn').addEventListener('click', register);
+    document.getElementById('regBackBtn').addEventListener('click', () => renderLogin());
+    card.querySelectorAll('input').forEach(input => input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') register();
+    }));
+  }
+
+  async function register() {
+    const email = document.getElementById('regEmail').value.trim();
+    const p1 = document.getElementById('regPwd1').value;
+    const p2 = document.getElementById('regPwd2').value;
+    const status = document.getElementById('regStatus');
+    const btn = document.getElementById('regSubmitBtn');
+    status.style.color = '#d4380d';
+    if (!email || !email.includes('@')) { status.textContent = '请填写正确的邮箱。'; return; }
+    if (p1.length < 6) { status.textContent = '密码至少 6 位。'; return; }
+    if (p1 !== p2) { status.textContent = '两次输入的密码不一致。'; return; }
+    btn.disabled = true;
+    status.style.color = '#1890ff';
+    status.textContent = '正在提交注册…';
+    try {
+      const { data, error } = await cloud.auth.signUp({ email, password: p1 });
+      if (error) throw error;
+      if (!data.session) {
+        status.style.color = '#52c41a';
+        status.textContent = '注册成功，但需要邮箱验证。请联系管理员在后台确认你的账号。';
+        btn.disabled = false;
+        return;
+      }
+      await cloud.auth.signOut();
+      status.style.color = '#52c41a';
+      status.textContent = '注册成功！已通知管理员审批，批准后即可用该邮箱和密码登录。';
+      setTimeout(() => renderLogin('账号已提交，等待管理员审批。'), 1600);
+    } catch (error) {
+      status.style.color = '#d4380d';
+      const msg = String(error.message || '');
+      status.textContent = /already|exists|registered/i.test(msg)
+        ? '该邮箱已注册，请直接登录或点“忘记密码”。'
+        : '注册失败：' + (msg || '请稍后重试');
+      btn.disabled = false;
+    }
+  }
+
+  // 待审批 / 被停用账号的提示页
+  function renderPending(message) {
+    cloudReady = false;
+    document.getElementById('view-mainApp').classList.remove('active');
+    const view = document.getElementById('view-roleSelector');
+    view.classList.add('active');
+    const card = view.querySelector('.role-card');
+    card.innerHTML = `
+      <h1>⏳ 账号待审批</h1>
+      <p class="subtitle">${esc(message || '管理员批准后即可进入系统')}</p>
+      <div style="max-width:380px;margin:22px auto 0;">
+        <button id="pendingLogoutBtn" class="role-start-btn">退出登录</button>
+        <div style="margin-top:14px;font-size:12px;color:#999;line-height:1.6;">
+          审批通过后重新打开本页面即可，无需再次注册。
+        </div>
+      </div>`;
+    document.getElementById('pendingLogoutBtn').addEventListener('click', async () => {
+      await cloud.auth.signOut();
+      renderLogin();
+    });
+  }
+
+  // 忘记密码：向登录邮箱发送重置链接（链接回到本页后进入设置新密码流程）。
+  async function sendResetMail() {
+    const email = (document.getElementById('cloudEmail').value || '').trim();
+    const status = document.getElementById('cloudLoginStatus');
+    status.style.color = '#d4380d';
+    if (!email) { status.textContent = '请先在上面填写邮箱，再点“忘记密码”。'; return; }
+    status.style.color = '#1890ff';
+    status.textContent = '正在发送重置邮件…';
+    const { error } = await cloud.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname
+    });
+    if (error) {
+      status.style.color = '#d4380d';
+      const msg = String(error.message || '');
+      status.textContent = /rate limit|exceeded/i.test(msg)
+        ? '重置邮件发送次数已达上限，请联系管理员在后台重置。'
+        : '发送失败：' + msg;
+      return;
+    }
+    status.style.color = '#52c41a';
+    status.textContent = '重置邮件已发送，请到邮箱点击链接设置新密码（若未收到请查看垃圾箱）。';
+  }
+
+  function clearAuthHash() {
+    try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+  }
+
+  // 邀请/重置链接回跳后：设置一次本人密码，之后用邮箱+密码正常登录。
+  function renderSetPassword() {
+    const isInvite = linkType === 'invite';
+    document.getElementById('view-mainApp').classList.remove('active');
+    const view = document.getElementById('view-roleSelector');
+    view.classList.add('active');
+    const card = view.querySelector('.role-card');
+    card.innerHTML = `
+      <h1>${isInvite ? '🔑 设置登录密码' : '🔑 重置登录密码'}</h1>
+      <p class="subtitle">${isInvite ? '账号已开通，请设置你自己的密码' : '请设置新的登录密码'}</p>
+      <div style="text-align:left;max-width:380px;margin:22px auto 0;">
+        <label style="display:block;margin-bottom:14px;">新密码
+          <input id="setPwd1" type="password" autocomplete="new-password" placeholder="至少 6 位"
+            style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+        </label>
+        <label style="display:block;margin-bottom:18px;">确认密码
+          <input id="setPwd2" type="password" autocomplete="new-password" placeholder="再次输入新密码"
+            style="width:100%;box-sizing:border-box;padding:11px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+        </label>
+        <button id="setPwdBtn" class="role-start-btn">保存并进入系统</button>
+        <div id="setPwdStatus" style="margin-top:14px;line-height:1.6;color:#666;">
+          密码由你本人设置并加密保存，管理员也无法查看。
+        </div>
+      </div>`;
+    document.getElementById('setPwdBtn').addEventListener('click', submitNewPassword);
+    card.querySelectorAll('input').forEach(input => input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') submitNewPassword();
+    }));
+  }
+
+  async function submitNewPassword() {
+    const p1 = document.getElementById('setPwd1').value;
+    const p2 = document.getElementById('setPwd2').value;
+    const status = document.getElementById('setPwdStatus');
+    const btn = document.getElementById('setPwdBtn');
+    status.style.color = '#d4380d';
+    if (p1.length < 6) { status.textContent = '密码至少 6 位。'; return; }
+    if (p1 !== p2) { status.textContent = '两次输入的密码不一致。'; return; }
+    btn.disabled = true;
+    status.style.color = '#1890ff';
+    status.textContent = '正在保存密码…';
+    try {
+      const { data: { session } } = await cloud.auth.getSession();
+      if (!session) throw new Error('链接已失效，请联系管理员重新发送邀请');
+      const { error } = await cloud.auth.updateUser({ password: p1 });
+      if (error) throw error;
+      clearAuthHash();
+      status.style.color = '#52c41a';
+      status.textContent = '密码已保存，正在进入系统…';
+      await enterCloud(session);
+    } catch (error) {
+      status.style.color = '#d4380d';
+      status.textContent = '保存失败：' + (error.message || '请重新打开邮件链接');
+      btn.disabled = false;
     }
   }
 
@@ -101,8 +291,15 @@
   async function enterCloud(session) {
     if (!session) { renderLogin(); return; }
     const { data: profile, error } = await cloud.from('profiles')
-      .select('display_name,role').eq('id', session.user.id).single();
-    if (error || !profile) throw new Error('账号尚未分配系统角色，请联系管理员');
+      .select('*').eq('id', session.user.id).single();
+    if (error || !profile) { renderPending('账号资料缺失，请联系管理员'); return; }
+    // status 字段由审批脚本新增；未升级时按 active 处理，避免把老账号锁在门外。
+    if (profile.status && profile.status !== 'active') {
+      renderPending(profile.status === 'blocked'
+        ? '账号已被停用，请联系管理员'
+        : '账号已注册，等待管理员批准后即可进入系统');
+      return;
+    }
 
     cloudUserId = session.user.id;
     actualRole = profile.role;
@@ -118,6 +315,8 @@
     document.getElementById('roleBadge').textContent = actualRole === 'admin' ? '👑 管理员' : '👨‍⚕️ 调查员';
     document.getElementById('userNameDisplay').textContent = currentUser.name;
     document.getElementById('logBtn').style.display = actualRole === 'admin' ? '' : 'none';
+    document.getElementById('memberBtn').style.display = actualRole === 'admin' ? '' : 'none';
+    document.getElementById('pwdBtn').style.display = '';
     const switchBtn = document.querySelector('button[onclick="switchRole()"]');
     if (switchBtn) {
       switchBtn.style.display = '';
@@ -387,6 +586,90 @@
       '</tbody></table>';
   };
 
+  window.openPwdModal = () => {
+    document.getElementById('newPwd1').value = '';
+    document.getElementById('newPwd2').value = '';
+    const status = document.getElementById('pwdStatus');
+    status.style.color = '#666';
+    status.textContent = '修改后请用新密码登录，旧密码立即失效。';
+    document.getElementById('pwdSaveBtn').disabled = false;
+    document.getElementById('pwdModal').classList.add('active');
+  };
+
+  window.closePwdModal = () => {
+    document.getElementById('pwdModal').classList.remove('active');
+  };
+
+  window.changePassword = async () => {
+    const p1 = document.getElementById('newPwd1').value;
+    const p2 = document.getElementById('newPwd2').value;
+    const status = document.getElementById('pwdStatus');
+    const btn = document.getElementById('pwdSaveBtn');
+    status.style.color = '#d4380d';
+    if (p1.length < 6) { status.textContent = '密码至少 6 位。'; return; }
+    if (p1 !== p2) { status.textContent = '两次输入的密码不一致。'; return; }
+    btn.disabled = true;
+    status.style.color = '#1890ff';
+    status.textContent = '正在保存…';
+    const { error } = await cloud.auth.updateUser({ password: p1 });
+    if (error) {
+      status.style.color = '#d4380d';
+      status.textContent = '保存失败：' + error.message;
+      btn.disabled = false;
+      return;
+    }
+    status.style.color = '#52c41a';
+    status.textContent = '密码已更新，下次登录请使用新密码。';
+    setTimeout(() => window.closePwdModal(), 1200);
+  };
+
+  // 成员审批：管理员批准注册申请、停用账号、调整管理员权限。
+  async function refreshMembers() {
+    const body = document.getElementById('memberBody');
+    const { data, error } = await cloud.from('profiles')
+      .select('*')
+      .order('created_at', { ascending: true });
+    if (error) { body.textContent = '读取失败：' + error.message; return; }
+    const rows = data || [];
+    const pending = rows.filter(r => r.status === 'pending').length;
+    const head = `<div style="padding:8px 4px 12px;color:#666;">共 ${rows.length} 个账号，待审批 <b style="color:#d4380d;">${pending}</b> 个</div>`;
+    const table = '<table class="patient-table"><thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
+      rows.map(r => {
+        const s = r.status || 'active';
+        const st = s === 'active' ? '✅ 正常' : (s === 'blocked' ? '⛔ 已停用' : '⏳ 待审批');
+        const btn = (label, action, arg) => `<button class="btn btn-default" style="padding:4px 10px;margin:2px;" onclick="memberAction('${r.id}','${action}'${arg ? `,'${arg}'` : ''})">${label}</button>`;
+        const acts = [];
+        if (s === 'pending') acts.push(btn('批准', 'status', 'active'));
+        if (s === 'active') acts.push(btn('停用', 'status', 'blocked'));
+        if (s === 'blocked') acts.push(btn('恢复', 'status', 'active'));
+        acts.push(r.role === 'admin' ? btn('取消管理员', 'role', 'investigator') : btn('设为管理员', 'role', 'admin'));
+        return `<tr><td>${esc(r.email || '—')}</td><td>${esc(r.display_name)}</td><td>${r.role === 'admin' ? '👑 管理员' : '👨‍⚕️ 调查员'}</td><td>${st}</td><td style="white-space:nowrap;">${acts.join('')}</td></tr>`;
+      }).join('') + '</tbody></table>';
+    body.innerHTML = head + table;
+  }
+
+  window.openMemberModal = async () => {
+    if (actualRole !== 'admin') { alert('仅管理员可以审批成员'); return; }
+    document.getElementById('memberModal').classList.add('active');
+    document.getElementById('memberBody').innerHTML = '<div style="padding:16px;color:#999;">加载中…</div>';
+    await refreshMembers();
+  };
+
+  window.closeMemberModal = () => {
+    document.getElementById('memberModal').classList.remove('active');
+  };
+
+  window.memberAction = async (id, field, value) => {
+    if (actualRole !== 'admin') return;
+    if (id === cloudUserId && field === 'role' && value !== 'admin') {
+      alert('不能取消自己的管理员权限。');
+      return;
+    }
+    const { error } = await cloud.from('profiles').update({ [field]: value }).eq('id', id);
+    if (error) { alert('操作失败：' + error.message); return; }
+    await refreshMembers();
+  };
+
   // 在线 AI：复用原页面提示词、DOCX/图片解析和人工确认，只替换模型请求通道。
   window.getAISettings = () => ({
     mode: 'cloud', endpoint: '', textModel: '', visionModel: '', preset: 'custom',
@@ -425,6 +708,15 @@
     document.head.appendChild(style);
     if (!configured) { renderLogin(); return; }
     try {
+      if (linkError) {
+        clearAuthHash();
+        renderLogin('账号开通链接已失效（' + linkError + '），请联系管理员重新发送邀请。');
+        return;
+      }
+      if (linkType === 'invite' || linkType === 'recovery') {
+        renderSetPassword();
+        return;
+      }
       const { data: { session } } = await cloud.auth.getSession();
       if (session) await enterCloud(session);
       else renderLogin();

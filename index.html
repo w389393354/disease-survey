@@ -859,6 +859,8 @@
       <div class="header-actions">
         <div class="header-stats" id="headerStats"></div>
         <button class="header-btn" id="logBtn" onclick="openLogModal()" style="display:none;">📜 操作日志</button>
+        <button class="header-btn" id="memberBtn" onclick="openMemberModal()" style="display:none;">👥 成员审批</button>
+        <button class="header-btn" id="pwdBtn" onclick="openPwdModal()" style="display:none;">🔑 修改密码</button>
         <button class="header-btn" onclick="exportMyData()">📤 导出我的数据</button>
         <button class="header-btn" onclick="importData()">📥 导入数据</button>
         <button class="header-btn" onclick="syncLatestData()">🔄 同步最新数据</button>
@@ -1160,6 +1162,45 @@
     <div class="modal-body" id="logBody" style="max-height:60vh; overflow:auto;"></div>
     <div class="modal-footer">
       <button class="btn btn-default" onclick="closeLogModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 修改密码 -->
+<div class="modal-overlay" id="pwdModal">
+  <div class="modal" style="max-width:460px;">
+    <div class="modal-header">
+      <h3>修改登录密码</h3>
+      <button class="modal-close" onclick="closePwdModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <label style="display:block;margin-bottom:14px;">新密码
+        <input id="newPwd1" type="password" autocomplete="new-password" placeholder="至少 6 位"
+          style="width:100%;box-sizing:border-box;padding:10px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+      </label>
+      <label style="display:block;">确认新密码
+        <input id="newPwd2" type="password" autocomplete="new-password" placeholder="再次输入新密码"
+          style="width:100%;box-sizing:border-box;padding:10px;margin-top:6px;border:1px solid #d9d9d9;border-radius:6px;">
+      </label>
+      <div id="pwdStatus" style="margin-top:14px;color:#666;line-height:1.6;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-default" onclick="closePwdModal()">取消</button>
+      <button class="btn btn-primary" id="pwdSaveBtn" onclick="changePassword()">保存新密码</button>
+    </div>
+  </div>
+</div>
+
+<!-- 成员审批（仅管理员） -->
+<div class="modal-overlay" id="memberModal">
+  <div class="modal" style="max-width:720px;">
+    <div class="modal-header">
+      <h3>成员审批</h3>
+      <button class="modal-close" onclick="closeMemberModal()">×</button>
+    </div>
+    <div class="modal-body" id="memberBody" style="max-height:60vh; overflow:auto;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-default" onclick="closeMemberModal()">关闭</button>
     </div>
   </div>
 </div>
