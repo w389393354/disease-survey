@@ -679,7 +679,8 @@
   window.cloudChat = async (_base, _key, _model, prompt, images) => {
     const { data: { session } } = await cloud.auth.getSession();
     if (!session) throw new Error('登录已失效，请重新登录');
-    const response = await fetch(cfg.SUPABASE_URL.replace(/\/+$/, '') + '/functions/v1/ai-recognize', {
+    // 与 Supabase 中已部署的 Edge Function 名称一致（控制台里显示的函数名）
+    const response = await fetch(cfg.SUPABASE_URL.replace(/\/+$/, '') + '/functions/v1/bright-function', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
